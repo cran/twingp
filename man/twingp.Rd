@@ -12,7 +12,8 @@ twingp(
   twins = 5,
   g_num = NULL,
   l_num = NULL,
-  v_num = NULL
+  v_num = NULL,
+  num_threads = NULL
 )
 }
 \arguments{
@@ -31,6 +32,8 @@ twingp(
 \item{l_num}{Number of local points included in the model, the default is \code{max(25, 3 * d)}}
 
 \item{v_num}{Number of validation points, the default is \code{2 * g_num}}
+
+\item{num_threads}{Number of threads for parallel computation, the default is all available threads}
 }
 \value{
 A list of two \code{t * 1} vectors \code{mu}, and \code{sigma} representing the mean prediction and associated standard error corresponding to \code{x_test}
@@ -39,7 +42,7 @@ A list of two \code{t * 1} vectors \code{mu}, and \code{sigma} representing the 
 A Fast Global-Local Gaussian Process Approximation
 }
 \details{
-We employ a combined global-local approach in building the Gaussian process approximation. Our framework uses a subset-of-data approach where the subset is a union of a set of global points designed to capture the global trend in the data, and a set of local points specific to a given testing location. We use \code{Twinning} (Vakayil and Joseph, 2022) to identify the set of global points. The local points are identified as the nearest neighbors to the testing location. The correlation function is also modeled as a combination of a global, and a local kernel. For further details on the methodology, please refer to Vakayil and Joseph (2023). We use \code{nanoflann} (Blanco and Rai, 2014) C++ library for nearest neighbor queries, and for matrix operations we use \code{Eigen} (Guennebaud and Jacob, 2010) C++ library.
+We employ a combined global-local approach in building the Gaussian process approximation. Our framework uses a subset-of-data approach where the subset is a union of a set of global points designed to capture the global trend in the data, and a set of local points specific to a given testing location. We use \code{Twinning} (Vakayil and Joseph, 2022) to identify the set of global points. The local points are identified as the nearest neighbors to the testing location. The correlation function is also modeled as a combination of a global, and a local kernel. For further details on the methodology, please refer to Vakayil and Joseph (2024).
 }
 \examples{
 grlee12 = function(x) {
@@ -54,16 +57,12 @@ y = apply(x, 1, grlee12) + rnorm(nrow(x)) * 0.1
 x_test = matrix(seq(0.5, 2.5, length=2000), ncol=1)
 y_test = apply(x_test, 1, grlee12)
 
-result = twingp(x, y, x_test)
+result = twingp(x, y, x_test, num_threads=2)
 rmse = sqrt(mean((y_test - result$mu)^2))
 
 }
 \references{
-Vakayil, A., & Joseph, V. R. (2023). A Global-Local Approximation Framework for Large-Scale Gaussian Process Modeling. ArXiv [Stat.ML]. http://arxiv.org/abs/2305.10158
+Vakayil, A., & Joseph, V. R. (2024). A Global-Local Approximation Framework for Large-Scale Gaussian Process Modeling. Technometrics, 66(2), 295-305.
 
-Vakayil, A., & Joseph, V. R. (2022). Data Twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal. https://doi.org/10.1002/sam.11574
-
-Guennebaud, G., Jacob, B., & Others. (2010). Eigen v3. http://eigen.tuxfamily.org
-
-Blanco, J. L. & Rai, P. K. (2014). nanoflann: a C++ header-only fork of FLANN, a library for nearest neighbor (NN) with kd-trees. https://github.com/jlblancoc/nanoflann
+Vakayil, A., & Joseph, V. R. (2022). Data Twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal, 15(5), 598-610.
 }

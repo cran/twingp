@@ -8,10 +8,11 @@
 #' @param g_num Number of global points included in the model, the default is \code{min(50 * d, max(sqrt(n), 10 * d))}
 #' @param l_num Number of local points included in the model, the default is \code{max(25, 3 * d)}
 #' @param v_num Number of validation points, the default is \code{2 * g_num}
+#' @param num_threads Number of threads for parallel computation, the default is all available threads
 #'
 #' @return A list of two \code{t * 1} vectors \code{mu}, and \code{sigma} representing the mean prediction and associated standard error corresponding to \code{x_test}
 #'
-#' @details We employ a combined global-local approach in building the Gaussian process approximation. Our framework uses a subset-of-data approach where the subset is a union of a set of global points designed to capture the global trend in the data, and a set of local points specific to a given testing location. We use \code{Twinning} (Vakayil and Joseph, 2022) to identify the set of global points. The local points are identified as the nearest neighbors to the testing location. The correlation function is also modeled as a combination of a global, and a local kernel. For further details on the methodology, please refer to Vakayil and Joseph (2023). We use \code{nanoflann} (Blanco and Rai, 2014) C++ library for nearest neighbor queries, and for matrix operations we use \code{Eigen} (Guennebaud and Jacob, 2010) C++ library.
+#' @details We employ a combined global-local approach in building the Gaussian process approximation. Our framework uses a subset-of-data approach where the subset is a union of a set of global points designed to capture the global trend in the data, and a set of local points specific to a given testing location. We use \code{Twinning} (Vakayil and Joseph, 2022) to identify the set of global points. The local points are identified as the nearest neighbors to the testing location. The correlation function is also modeled as a combination of a global, and a local kernel. For further details on the methodology, please refer to Vakayil and Joseph (2024). 
 #'
 #' @export
 #' @examples
@@ -27,19 +28,15 @@
 #' x_test = matrix(seq(0.5, 2.5, length=2000), ncol=1)
 #' y_test = apply(x_test, 1, grlee12)
 #' 
-#' result = twingp(x, y, x_test)
+#' result = twingp(x, y, x_test, num_threads=2)
 #' rmse = sqrt(mean((y_test - result$mu)^2))
 #'
 #' @references
-#' Vakayil, A., & Joseph, V. R. (2023). A Global-Local Approximation Framework for Large-Scale Gaussian Process Modeling. ArXiv [Stat.ML]. http://arxiv.org/abs/2305.10158
+#' Vakayil, A., & Joseph, V. R. (2024). A Global-Local Approximation Framework for Large-Scale Gaussian Process Modeling. Technometrics, 66(2), 295-305.
 #' 
-#' Vakayil, A., & Joseph, V. R. (2022). Data Twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal. https://doi.org/10.1002/sam.11574
-#' 
-#' Guennebaud, G., Jacob, B., & Others. (2010). Eigen v3. http://eigen.tuxfamily.org
-#' 
-#' Blanco, J. L. & Rai, P. K. (2014). nanoflann: a C++ header-only fork of FLANN, a library for nearest neighbor (NN) with kd-trees. https://github.com/jlblancoc/nanoflann
+#' Vakayil, A., & Joseph, V. R. (2022). Data Twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal, 15(5), 598-610.
 
-twingp = function(x, y, x_test, nugget=TRUE, twins=5, g_num=NULL, l_num=NULL, v_num=NULL)
+twingp = function(x, y, x_test, nugget=TRUE, twins=5, g_num=NULL, l_num=NULL, v_num=NULL, num_threads=NULL)
 {
     d = ncol(x)
     N = nrow(x)
@@ -61,19 +58,23 @@ twingp = function(x, y, x_test, nugget=TRUE, twins=5, g_num=NULL, l_num=NULL, v_
 
     m = apply(x, 2, min)
     M = apply(x, 2, max)
+
     x = sweep(x, 2, m, "-")
     x = sweep(x, 2, M - m, "/")
     x_test = sweep(x_test, 2, m, "-")
     x_test = sweep(x_test, 2, M - m, "/")
 
-    twinning_result = get_twinIndices(cbind(x, (y - min(y)) / (max(y) - min(y))), r=g, rv=v, twins, sample(N, twins) - 1, 8)
-    return(glgp_cpp(cbind(x, y), x_test, twinning_result$gIndices, twinning_result$theta_l, twinning_result$vIndices, l_num, nugget, 8))
+    if(is.null(num_threads)) {
+        num_threads = parallel::detectCores()
+    } else if(as.integer(num_threads) <= 0) {
+        stop("num_threads should be a positive integer")
+    } else {
+        num_threads = min(as.integer(num_threads), parallel::detectCores())
+    }
+
+    twinning_result = get_twinIndices(cbind(x, (y - min(y)) / (max(y) - min(y))), r=g, rv=v, twins, sample(N, twins) - 1, num_threads, 8)
+    return(glgp_cpp(cbind(x, y), x_test, twinning_result$gIndices, twinning_result$theta_l, twinning_result$vIndices, l_num, nugget, num_threads, 8))
 }
-
-
-
-
-
 
 
 

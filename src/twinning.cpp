@@ -1,3 +1,8 @@
+/*
+    Copyright 2024 Akhil Vakayil (akhilv@gatech.edu). All rights reserved.
+    License: Apache-2.0
+*/
+
 // [[Rcpp::plugins("cpp11")]]
 #include <memory>
 #include <vector>
@@ -6,35 +11,35 @@
 #include <limits>
 #include <algorithm>
 #include <numeric>
-#include "nanoflann.hpp"
+#include "nanoflann.h"
 
 
 class DF2
 {
 private:
-	std::shared_ptr<Rcpp::NumericMatrix> df_;
+    std::shared_ptr<Rcpp::NumericMatrix> df_;
     bool subset_ = false;
     std::vector<std::size_t>* indices_;
 
 public:
-	void import_data(Rcpp::NumericMatrix& df) { df_ = std::make_shared<Rcpp::NumericMatrix>(Rcpp::transpose(df)); }
+    void import_data(Rcpp::NumericMatrix& df) { df_ = std::make_shared<Rcpp::NumericMatrix>(Rcpp::transpose(df)); }
+    
+    std::size_t kdtree_get_point_count() const { return subset_ ? indices_->size() : df_->cols(); }
 
-	std::size_t kdtree_get_point_count() const { return subset_ ? indices_->size() : df_->cols(); }
-
-	double kdtree_get_pt(const std::size_t idx, const std::size_t dim) const { return subset_ ? (*df_)(dim, indices_->at(idx)) : (*df_)(dim, idx); }
-
-	const double* get_row(const std::size_t idx) const { return &(*df_)(0, idx); }
-
+    double kdtree_get_pt(const std::size_t idx, const std::size_t dim) const { return subset_ ? (*df_)(dim, indices_->at(idx)) : (*df_)(dim, idx); }
+    
+    const double* get_row(const std::size_t idx) const { return &(*df_)(0, idx); }
+    
     void subset_on(std::vector<std::size_t>* indices) 
     { 
         subset_ = true; 
         indices_ = indices;
     }
-
+    
     void subset_off() { subset_ = false; }
-
-	template <class BBOX>
-	bool kdtree_get_bbox(BBOX&) const { return false; }
+    
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX&) const { return false; }
 };
 
 
@@ -44,31 +49,32 @@ typedef nanoflann::KDTreeSingleIndexDynamicAdaptor<nanoflann::L2_Adaptor<double,
 class KDTree
 {
 private:
-	const std::size_t dim_;
-	const std::size_t N_;
-	const std::size_t r_;
+    const std::size_t dim_;
+    const std::size_t N_;
+    const std::size_t r_;
     const std::size_t rv_;
     const std::size_t runs_;
     const std::vector<std::size_t> u1_;
-	const std::size_t leaf_size_;
-	DF2 data_;
+    const std::size_t num_threads_;
+    const std::size_t leaf_size_;
+    DF2 data_;
     Rcpp::List returns_;
 
 public:
-	KDTree(Rcpp::NumericMatrix& data, std::size_t r, std::size_t rv, std::size_t runs, std::vector<std::size_t>& u1, std::size_t leaf_size) : 
-	dim_(data.cols()), N_(data.rows()), r_(r), rv_(rv), runs_(runs), u1_(u1), leaf_size_(leaf_size)
-	{
-		data_.import_data(data);
-	}
+    KDTree(Rcpp::NumericMatrix& data, std::size_t r, std::size_t rv, std::size_t runs, std::vector<std::size_t>& u1, std::size_t num_threads, std::size_t leaf_size) : 
+    dim_(data.cols()), N_(data.rows()), r_(r), rv_(rv), runs_(runs), u1_(u1), num_threads_(num_threads), leaf_size_(leaf_size)
+    {
+        data_.import_data(data);
+    }
 
-	Rcpp::List twin()
-	{
+    Rcpp::List twin()
+    {
         std::vector<std::vector<std::size_t>> all_indices;
         std::vector<double> min_dist;
         all_indices.resize(runs_);
         min_dist.resize(runs_);
 
-        #pragma omp parallel for
+        #pragma omp parallel for num_threads(num_threads_)
         for(std::size_t run = 0; run < runs_; run++)
         {
             kdTree tree(dim_, data_, nanoflann::KDTreeSingleIndexAdaptorParams(leaf_size_));
@@ -87,14 +93,14 @@ public:
             while(true)
             {
                 resultSet.init(index, distance);
-                tree.findNeighbors(resultSet, data_.get_row(position), nanoflann::SearchParams());
+                tree.findNeighbors(resultSet, data_.get_row(position));
                 indices.push_back(index[0]);
 
                 for(std::size_t i = 0; i < r_; i++)
                     tree.removePoint(index[i]);
 
                 resultSet_next_u.init(&index_next_u, &distance_next_u);
-                tree.findNeighbors(resultSet_next_u, data_.get_row(index[r_ - 1]), nanoflann::SearchParams());	
+                tree.findNeighbors(resultSet_next_u, data_.get_row(index[r_ - 1]));	
                 position = index_next_u;
 
                 if(N_ - indices.size() * r_ <= r_)
@@ -131,7 +137,7 @@ public:
         returns_["theta_l"] = theta_l();
         returns_["vIndices"] = vIndices();
         return returns_;
-	}
+    }
 
     double theta_l()
     {
@@ -143,7 +149,7 @@ public:
         std::vector<double> distances;
         distances.resize(N_);
 
-        #pragma omp parallel for
+        #pragma omp parallel for num_threads(num_threads_)
         for(std::size_t i = 0; i < N_; i++)
         {
             nanoflann::KNNResultSet<double> resultSet(1);
@@ -151,7 +157,7 @@ public:
             double distance;
 
             resultSet.init(&index, &distance);
-            tree.findNeighbors(resultSet, data_.get_row(i), nanoflann::SearchParams());
+            tree.findNeighbors(resultSet, data_.get_row(i));
             distances[i] = distance;
         }
 
@@ -196,14 +202,14 @@ public:
         while(true)
         {
             resultSet.init(index, distance);
-            tree.findNeighbors(resultSet, data_.get_row(position), nanoflann::SearchParams());
+            tree.findNeighbors(resultSet, data_.get_row(position));
             indices.push_back(index[0]);
 
             for(std::size_t i = 0; i < rv_; i++)
                 tree.removePoint(index[i]);
 
             resultSet_next_u.init(&index_next_u, &distance_next_u);
-            tree.findNeighbors(resultSet_next_u, data_.get_row(index[rv_ - 1]), nanoflann::SearchParams());	
+            tree.findNeighbors(resultSet_next_u, data_.get_row(index[rv_ - 1]));	
             position = index_next_u;
 
             if(N - indices.size() * rv_ <= rv_)
@@ -221,8 +227,9 @@ public:
 
 
 // [[Rcpp::export]]
-Rcpp::List get_twinIndices(Rcpp::NumericMatrix& data, std::size_t r, std::size_t rv, std::size_t runs, std::vector<std::size_t>& u1, std::size_t leaf_size=8)
+Rcpp::List get_twinIndices(Rcpp::NumericMatrix& data, std::size_t r, std::size_t rv, std::size_t runs, std::vector<std::size_t>& u1, std::size_t num_threads, std::size_t leaf_size)
 {
-	KDTree tree(data, r, rv, runs, u1, leaf_size);
-	return tree.twin();
+    KDTree tree(data, r, rv, runs, u1, num_threads, leaf_size);
+    return tree.twin();
 }
+

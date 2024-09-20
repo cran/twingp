@@ -1,4 +1,5 @@
 useDynLib(twingp, .registration=TRUE)
 import(Rcpp)
 import(nloptr)
+importFrom(parallel, detectCores)
 export(twingp)

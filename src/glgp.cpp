@@ -1,40 +1,37 @@
+/*
+    Copyright 2024 Akhil Vakayil (akhilv@gatech.edu). All rights reserved.
+    License: Apache-2.0
+*/
+
 // [[Rcpp::plugins("cpp11")]]
 #include <memory>
 #include <vector>
 #include <Rcpp.h>
 #include <cmath>
 #include <limits>
-#include <complex>
 #include <nloptrAPI.h>
-#include "nanoflann.hpp"
-
-#define EIGEN_USE_BLAS
-#define EIGEN_USE_LAPACKE
-#define LAPACK_COMPLEX_CUSTOM
-#define lapack_complex_float std::complex<float>
-#define lapack_complex_double std::complex<double>
 #include <Eigen/Dense>
+#include "nanoflann.h"
 
 
-// custom data frame
 class DF
 {
 private:
-	std::shared_ptr<Rcpp::NumericMatrix> df_;
+    std::shared_ptr<Rcpp::NumericMatrix> df_;
 
 public:
-	void import_data(Rcpp::NumericMatrix& df) { df_ = std::make_shared<Rcpp::NumericMatrix>(Rcpp::transpose(df)); }
-
-	const double* get_row(const std::size_t idx) const { return &(*df_)(0, idx); }
-
+    void import_data(Rcpp::NumericMatrix& df) { df_ = std::make_shared<Rcpp::NumericMatrix>(Rcpp::transpose(df)); }
+    
+    const double* get_row(const std::size_t idx) const { return &(*df_)(0, idx); }
+    
     double get_value(const std::size_t idx, const std::size_t dim) const { return (*df_)(dim, idx); }
 
     std::size_t kdtree_get_point_count() const { return df_->cols(); }
-
-	double kdtree_get_pt(const std::size_t idx, const std::size_t dim) const { return (*df_)(dim, idx); }
+    
+    double kdtree_get_pt(const std::size_t idx, const std::size_t dim) const { return (*df_)(dim, idx); }
 
     template <class BBOX>
-	bool kdtree_get_bbox(BBOX&) const { return false; }
+    bool kdtree_get_bbox(BBOX&) const { return false; }
 };
 
 double mse(unsigned n, const double* sParams, double* grad, void* mse_data);
@@ -43,7 +40,7 @@ double nllg(unsigned n, const double* gParams, double* grad, void* nllg_data);
 
 typedef nanoflann::KDTreeSingleIndexDynamicAdaptor<nanoflann::L2_Adaptor<double, DF>, DF, -1, std::size_t> kdTree;
 
-// global-local gaussian process
+
 class GP
 {
 private:
@@ -73,10 +70,11 @@ private:
 
     kdTree* tree_;
     std::size_t leaf_size_;
+    std::size_t num_threads_;
 
 public:
     GP(Rcpp::NumericMatrix& xy, Rcpp::NumericMatrix& x_test, std::vector<std::size_t>& gIndices, double theta, 
-        std::vector<std::size_t>& predIndices, std::size_t lNum, std::size_t leaf_size, bool nugget=false)
+        std::vector<std::size_t>& predIndices, std::size_t lNum, std::size_t num_threads, std::size_t leaf_size, bool nugget=false)
     {
         xy_.import_data(xy);
         x_test_.import_data(x_test);
@@ -98,6 +96,7 @@ public:
         lNum_ = lNum;
         theta_ = theta;
         leaf_size_ = leaf_size;
+        num_threads_ = num_threads;
         tree_ = new kdTree(dim_, xy_, nanoflann::KDTreeSingleIndexAdaptorParams(leaf_size_));
         for(std::size_t i = 0; i < gNum_; i++)
         {
@@ -134,7 +133,7 @@ public:
 
 void GP::find_RgRl()
 {
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(num_threads_)
     for(std::size_t i = 0; i < gNum_; i++)
         for(std::size_t j = i; j < gNum_; j++)
         {
@@ -206,8 +205,6 @@ void GP::estimate_sParams()
     nlopt_destroy(optimizer);
     lam_ = std::exp(sParams[0]);
     nug_ = (1.0 - lam_) * gParams_[dim_ + 1] + lam_ * std::exp(sParams[1]);
-    // Rcpp::Rcout << "Lambda: " << lam_ << std::endl;
-    // Rcpp::Rcout << "Nugget (final): " << nug_ << std::endl;
 }
 
 
@@ -236,7 +233,7 @@ void GP::estimate_gParams()
     std::vector<double> nllg_values;
     nllg_values.resize(alpha.size());
 
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(num_threads_)
     for(std::size_t i = 0; i < static_cast<std::size_t>(alpha.size()); i++)
     {
         std::vector<double> gParams;
@@ -267,7 +264,7 @@ void GP::estimate_gParams()
     std::vector<std::pair<double, std::vector<double>>> opt_results;
     opt_results.resize(num_opt);
 
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(num_threads_)
     for(std::size_t i = 0; i < num_opt; i++)
     {
         std::vector<double> gParams;
@@ -296,14 +293,7 @@ void GP::estimate_gParams()
         nlopt_destroy(optimizer[i]);
     }
 
-    // Rcpp::Rcout << "Parameters: ";
-    // for(std::size_t i = 0; i < dim_; i++)
-    //     Rcpp::Rcout << gParams[i] << " ";
-
     gParams[dim_ + 1] = std::exp(gParams[dim_ + 1]);
-    // Rcpp::Rcout << std::endl << "Kernel power: " << gParams[dim_] << std::endl;
-    // Rcpp::Rcout << "Nugget (global): " << gParams[dim_ + 1] << std::endl;
-    // Rcpp::Rcout << "NLL (global): "<< nllg_min / 2.0 << std::endl;
     set_gParams(gParams);
     find_RgRl();
 }
@@ -317,7 +307,7 @@ Rcpp::List GP::gp_predict()
     predictions.resize(test_num);
     sigmas.resize(test_num);
 
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(num_threads_)
     for(std::size_t i = 0; i < test_num; i++)
     {
         double pred, sigma;
@@ -342,9 +332,9 @@ void GP::predict(std::size_t ind, double lam, double nugget, double* pred, void*
 
     resultSet.init(index, distance);
     if(test)
-        tree_->findNeighbors(resultSet, x_test_.get_row(ind), nanoflann::SearchParams());
+        tree_->findNeighbors(resultSet, x_test_.get_row(ind));
     else
-        tree_->findNeighbors(resultSet, xy_.get_row(ind), nanoflann::SearchParams());
+        tree_->findNeighbors(resultSet, xy_.get_row(ind));
 
     Eigen::VectorXd yl(lNum_);
     for(std::size_t j = 0; j < lNum_; j++)
@@ -467,7 +457,7 @@ double GP::get_mse(double lam, double nugget)
     find_Ainv(lam, nugget);
     double mse = 0.0;
 
-    #pragma omp parallel for reduction(+ : mse)
+    #pragma omp parallel for reduction(+ : mse) num_threads(num_threads_)
     for(std::size_t i = 0; i < static_cast<std::size_t>(predIndices_.size()); i++)
     {
         double pred;
@@ -530,33 +520,12 @@ double GP::get_nllg(const double* gParams)
 
 // [[Rcpp::export]]
 Rcpp::List glgp_cpp(Rcpp::NumericMatrix& xy, Rcpp::NumericMatrix& x_test, std::vector<std::size_t>& gIndices, double theta, 
-    std::vector<std::size_t>& predIndices, std::size_t lNum, bool nugget, std::size_t leaf_size)
+    std::vector<std::size_t>& predIndices, std::size_t lNum, bool nugget, std::size_t num_threads, std::size_t leaf_size)
 {
-    GP glgp(xy, x_test, gIndices, theta, predIndices, lNum, leaf_size, nugget);
+    GP glgp(xy, x_test, gIndices, theta, predIndices, lNum, num_threads, leaf_size, nugget);
     glgp.estimate_gParams();
     glgp.estimate_sParams();
     return glgp.gp_predict();
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
